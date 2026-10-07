@@ -52,11 +52,22 @@ const MAZE = MAZE_STR.map( ( row ) => row.split( '' ).map( parseTile ) );
 const TUNNEL_ROW = 14;
 const PACMAN_START = { x: 13, y: 23 };
 const GHOST_STARTS = [
-  { x: 13, y: 14, kind: 'hunter' }, // dentro de la pen
-  { x: 14, y: 14, kind: 'random' }, // dentro de la pen
+  { x: 13, y: 11, kind: 'rojo' },    // fuera del corral, sobre la puerta
+  { x: 13, y: 14, kind: 'rosa' },    // interior del corral, columna de salida
+  { x: 12, y: 14, kind: 'cian' },    // interior del corral
+  { x: 15, y: 14, kind: 'naranja' }, // interior del corral
 ];
+
+// Esquinas de scatter (celdas transitables de cada esquina del laberinto).
+const GHOST_SCATTER = {
+  rojo:    { x: 26, y: 1 },
+  rosa:    { x: 1,  y: 1 },
+  cian:    { x: 26, y: 29 },
+  naranja: { x: 1,  y: 29 },
+};
 
 window.MAZE = MAZE;
 window.TUNNEL_ROW = TUNNEL_ROW;
 window.PACMAN_START = PACMAN_START;
 window.GHOST_STARTS = GHOST_STARTS;
+window.GHOST_SCATTER = GHOST_SCATTER;
