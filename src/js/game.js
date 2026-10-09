@@ -12,6 +12,18 @@ const OPPOSITE = { left: 'right', right: 'left', up: 'down', down: 'up' };
 
 const PACMAN_SPEED = 0.125; // 1/8 celda/frame -> alinea cada 8 frames
 const GHOST_SPEED = 0.1;    // 1/10 celda/frame
+const POWER_PELLET_POINTS = 50;
+
+// Modo asustado (power pellet): 6 s a 60 fps, huida a mitad de velocidad,
+// parpadeo de aviso en los ultimos 2 s.
+const FRIGHTENED_FRAMES = 360;
+const FRIGHTENED_FLASH = 120;
+const FRIGHTENED_SPEED = 0.05;
+const EYES_SPEED = 0.2;
+const FRIGHT_POINTS = [ 200, 400, 800, 1600 ];
+
+// Centro del corral: destino de los ojos y celda donde reviven.
+const PEN_CENTER = { x: 13, y: 14 };
 
 // Ciclo de modos (frames a 60 fps): 20 s chase -> 7 s scatter, repetido
 // infinito, arrancando en chase. Salidas del corral: rojo 0 (ya fuera),
@@ -28,7 +40,7 @@ function createGame() {
   grid[ PACMAN_START.y ][ PACMAN_START.x ] = 0;
 
   let dots = 0;
-  for ( const row of grid ) for ( const v of row ) if ( v === 2 ) dots++;
+  for ( const row of grid ) for ( const v of row ) if ( v === 2 || v === 4 ) dots++;
 
   return {
     state: 'start',
@@ -39,6 +51,8 @@ function createGame() {
     mode: 'chase',
     modeTimer: 0,
     ticks: 0,
+    frightTimer: 0, // frames restantes del modo asustado (0 = inactivo)
+    frightChain: 0, // fantasmas comidos bajo el pellet actual (0..3)
     pacman: {
       x: PACMAN_START.x,
       y: PACMAN_START.y,
@@ -51,6 +65,7 @@ function createGame() {
       y: g.y,
       dir: 'up',
       speed: GHOST_SPEED,
+      state: 'normal', // 'normal' | 'frightened' | 'eyes'
       kind: g.kind,
       corner: { ...GHOST_SCATTER[ g.kind ] },
       released: false,
@@ -63,6 +78,15 @@ function aligned( v ) {
   return Math.abs( v - Math.round( v ) ) < 1e-3;
 }
 
+// Re-alinea al centro de celda mas cercano. Obligatorio al cambiar de
+// velocidad (asustado 0.05 -> ojos 0.2 / normal 0.1): desde un offset
+// fraccional los pasos nuevos no siempre vuelven a un entero y sin centro
+// exacto decideGhost() nunca corre.
+function snapToCell( a ) {
+  a.x = Math.round( a.x );
+  a.y = Math.round( a.y );
+}
+
 // Una celda es muro para el actor dado?
 //   pacman: bloqueado por pared (1) y puerta (3)
 //   ghost:  bloqueado solo por pared (1)
@@ -72,6 +96,9 @@ function isWall( grid, x, y, actor ) {
   const v = grid[ y ][ x ];
   if ( v === 1 ) return true;
   if ( v === 3 && actor === 'pacman' ) return true;
+  // Ojos: la puerta nunca es muro — regresan al corral hacia abajo
+  // (excepcion a la regla de un sentido de SPEC 02).
+  if ( v === 3 && actor === 'eyes' ) return false;
   return false;
 }
 
@@ -107,11 +134,20 @@ function movePacman( game ) {
       p.dir = p.nextDir;
       p.nextDir = null;
     }
-    // Comer dot.
-    if ( grid[ p.y ][ p.x ] === 2 ) {
+    // Comer dot o power pellet.
+    const cell = grid[ p.y ][ p.x ];
+    if ( cell === 2 || cell === 4 ) {
       grid[ p.y ][ p.x ] = 0;
-      game.score += 10;
+      game.score += cell === 4 ? POWER_PELLET_POINTS : 10;
       game.dotsRemaining--;
+      // Power pellet: se asustan todos (los ojos no).
+      if ( cell === 4 ) {
+        game.frightTimer = FRIGHTENED_FRAMES;
+        game.frightChain = 0;
+        for ( const g of game.ghosts ) {
+          if ( g.state !== 'eyes' ) g.state = 'frightened';
+        }
+      }
     }
     // Si no puede seguir, se detiene en la celda.
     if ( !canMove( grid, p.x, p.y, p.dir, 'pacman' ) ) return;
@@ -164,28 +200,45 @@ function computeTarget( game, g ) {
 
 function decideGhost( game, g ) {
   const grid = game.grid;
-  const target = computeTarget( game, g );
+  // Ojos: regreso al corral. Huida: el objetivo es Pac-Man pero se maximiza
+  // la distancia. Normal: conducta propia segun el modo.
+  const flee = g.state === 'frightened';
+  const eyes = g.state === 'eyes';
+  const target = eyes
+    ? PEN_CENTER
+    : flee
+      ? { x: Math.round( game.pacman.x ), y: Math.round( game.pacman.y ) }
+      : computeTarget( game, g );
 
   const options = Object.keys( DIRS ).filter(
-    ( dir ) => dir !== OPPOSITE[ g.dir ] && canMove( grid, g.x, g.y, dir, 'ghost' )
+    ( dir ) => dir !== OPPOSITE[ g.dir ] && canMove( grid, g.x, g.y, dir, eyes ? 'eyes' : 'ghost' )
   );
   // Sin salida (callejon): permitir el giro de 180.
   const choices = options.length ? options : [ '' + OPPOSITE[ g.dir ] ];
 
-  // Greedy: la direccion que mas reduce la distancia Manhattan al objetivo.
+  // Greedy: la direccion que mas reduce la distancia Manhattan al objetivo
+  // (en huida, la que mas la aumenta respecto de Pac-Man).
   let best = choices[ 0 ];
-  let bestDist = Infinity;
+  let bestDist = flee ? -Infinity : Infinity;
   for ( const dir of choices ) {
     const d = DIRS[ dir ];
     const nx = g.x + d.x;
     const ny = g.y + d.y;
     const dist = Math.abs( nx - target.x ) + Math.abs( ny - target.y );
-    if ( dist < bestDist ) {
+    if ( flee ? dist > bestDist : dist < bestDist ) {
       bestDist = dist;
       best = dir;
     }
   }
   g.dir = best;
+}
+
+// Velocidad del fantasma segun su estado (solo moveGhost; la salida guiada
+// del corral sigue usando g.speed).
+function ghostSpeed( g ) {
+  if ( g.state === 'frightened' ) return FRIGHTENED_SPEED;
+  if ( g.state === 'eyes' ) return EYES_SPEED;
+  return GHOST_SPEED;
 }
 
 function moveGhost( game, g ) {
@@ -195,13 +248,22 @@ function moveGhost( game, g ) {
   if ( aligned( g.x ) && aligned( g.y ) ) {
     g.x = Math.round( g.x );
     g.y = Math.round( g.y );
+
+    // Ojos al centro del corral: reviven y salen guiados por exitPen().
+    if ( g.state === 'eyes' && g.x === PEN_CENTER.x && g.y === PEN_CENTER.y ) {
+      g.state = 'normal';
+      g.released = false;
+      return;
+    }
+
     decideGhost( game, g );
-    if ( !canMove( grid, g.x, g.y, g.dir, 'ghost' ) ) return;
+    if ( !canMove( grid, g.x, g.y, g.dir, g.state === 'eyes' ? 'eyes' : 'ghost' ) ) return;
   }
 
   const d = DIRS[ g.dir ];
-  g.x += d.x * g.speed;
-  g.y += d.y * g.speed;
+  const speed = ghostSpeed( g );
+  g.x += d.x * speed;
+  g.y += d.y * speed;
   wrapTunnel( g, width );
 }
 
@@ -242,11 +304,15 @@ function resetPositions( game ) {
     g.dir = 'up';
     g.released = false;
     g.releaseAt = RELEASE_FRAMES[ g.kind ];
+    g.state = 'normal';
   } );
   // Se reinician el calendario de salidas y el ciclo de modos.
   game.ticks = 0;
   game.mode = 'chase';
   game.modeTimer = 0;
+  // Se cancela el modo asustado y su cadena de puntos.
+  game.frightTimer = 0;
+  game.frightChain = 0;
 }
 
 function collides( a, b ) {
@@ -256,18 +322,37 @@ function collides( a, b ) {
 function update( game ) {
   game.ticks++;
 
-  // Ciclo de modos: 20 s chase -> 7 s scatter, repetido infinito.
-  game.modeTimer++;
-  if ( game.mode === 'chase' && game.modeTimer >= CHASE_FRAMES ) {
-    game.mode = 'scatter';
-    game.modeTimer = 0;
-  } else if ( game.mode === 'scatter' && game.modeTimer >= SCATTER_FRAMES ) {
-    game.mode = 'chase';
-    game.modeTimer = 0;
+  // Modo asustado: corre el timer con el ciclo scatter/chase pausado. Corre
+  // antes de mover y de las colisiones: al expirar, ese frame ya es letal.
+  if ( game.frightTimer > 0 ) {
+    game.frightTimer--;
+    if ( game.frightTimer === 0 ) {
+      for ( const g of game.ghosts ) {
+        if ( g.state === 'frightened' ) {
+          g.state = 'normal';
+          snapToCell( g ); // 0.05 -> 0.1: realinear al centro
+        }
+      }
+    }
+  } else {
+    // Ciclo de modos: 20 s chase -> 7 s scatter, repetido infinito.
+    game.modeTimer++;
+    if ( game.mode === 'chase' && game.modeTimer >= CHASE_FRAMES ) {
+      game.mode = 'scatter';
+      game.modeTimer = 0;
+    } else if ( game.mode === 'scatter' && game.modeTimer >= SCATTER_FRAMES ) {
+      game.mode = 'chase';
+      game.modeTimer = 0;
+    }
   }
 
   movePacman( game );
   game.ghosts.forEach( ( g ) => {
+    // Ojos: regreso directo al corral (moveGhost decide por estado).
+    if ( g.state === 'eyes' ) {
+      moveGhost( game, g );
+      return;
+    }
     if ( !g.released ) {
       // Calendario de salidas: quieto hasta su frame, luego salida guiada.
       if ( game.ticks >= g.releaseAt ) exitPen( game, g );
@@ -277,15 +362,24 @@ function update( game ) {
   } );
 
   for ( const g of game.ghosts ) {
-    if ( collides( game.pacman, g ) ) {
-      game.lives--;
-      if ( game.lives <= 0 ) {
-        game.state = 'lost';
-        return;
-      }
-      resetPositions( game );
-      break;
+    if ( !collides( game.pacman, g ) ) continue;
+    // Ojos: inofensivos, se atraviesan.
+    if ( g.state === 'eyes' ) continue;
+    // Asustado: Pac-Man se lo come (cadena de puntos) y vuelve como ojos.
+    if ( g.state === 'frightened' ) {
+      game.score += FRIGHT_POINTS[ game.frightChain ];
+      game.frightChain++;
+      g.state = 'eyes';
+      snapToCell( g ); // 0.05 -> 0.2: realinear al centro
+      continue;
     }
+    game.lives--;
+    if ( game.lives <= 0 ) {
+      game.state = 'lost';
+      return;
+    }
+    resetPositions( game );
+    break;
   }
 
   if ( game.dotsRemaining <= 0 ) game.state = 'won';
@@ -294,3 +388,4 @@ function update( game ) {
 window.createGame = createGame;
 window.update = update;
 window.DIRS = DIRS;
+window.FRIGHTENED_FLASH = FRIGHTENED_FLASH;

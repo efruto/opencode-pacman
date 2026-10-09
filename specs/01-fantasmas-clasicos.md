@@ -1,6 +1,6 @@
 # SPEC 01 — Los cuatro fantasmas con conductas clásicas
 
-> **Estado:** Aprobado
+> **Estado:** Implementado
 > **Depende de:** ninguno
 > **Fecha:** 2026-10-07
 > **Objetivo:** Cuatro fantasmas con conductas distintas del arcade clásico —el rojo agresivo que persigue directo a Pac-Man—, salidas escalonadas del corral y ciclo scatter/chase.
