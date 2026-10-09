@@ -5,6 +5,8 @@ const TILE = 20;
 const WALL_COLOR = '#2121ff';
 const DOOR_COLOR = '#ffb8ff';
 const DOT_COLOR = '#ffb897';
+const FRIGHTENED_COLOR = '#2121ff';       // cuerpo del fantasma asustado
+const FRIGHTENED_FLASH_COLOR = '#ffffff'; // parpadeo de aviso del fin
 
 function cellCenter( x, y ) {
   return { cx: x * TILE + TILE / 2, cy: y * TILE + TILE / 2 };
@@ -70,10 +72,12 @@ function drawDots( ctx, grid ) {
   ctx.fillStyle = DOT_COLOR;
   for ( let y = 0; y < grid.length; y++ ) {
     for ( let x = 0; x < grid[ 0 ].length; x++ ) {
-      if ( grid[ y ][ x ] !== 2 ) continue;
+      const v = grid[ y ][ x ];
+      if ( v !== 2 && v !== 4 ) continue;
       const { cx, cy } = cellCenter( x, y );
       ctx.beginPath();
-      ctx.arc( cx, cy, 2.5, 0, Math.PI * 2 );
+      // Power pellet (4): radio mayor que el dot normal.
+      ctx.arc( cx, cy, v === 4 ? 6.5 : 2.5, 0, Math.PI * 2 );
       ctx.fill();
     }
   }
@@ -106,17 +110,20 @@ function drawGhost( ctx, g, color ) {
   const left = cx - r;
   const right = cx + r;
 
-  ctx.fillStyle = color;
-  ctx.beginPath();
-  ctx.arc( cx, cy - 1, r, Math.PI, 0, false ); // cabeza
-  ctx.lineTo( right, bottom );
-  // falda ondulada (3 picos)
-  ctx.lineTo( right - r * 0.66, bottom - 4 );
-  ctx.lineTo( cx, bottom );
-  ctx.lineTo( left + r * 0.66, bottom - 4 );
-  ctx.lineTo( left, bottom );
-  ctx.closePath();
-  ctx.fill();
+  // Ojos (de regreso al corral): solo los ojos, sin cuerpo.
+  if ( g.state !== 'eyes' ) {
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc( cx, cy - 1, r, Math.PI, 0, false ); // cabeza
+    ctx.lineTo( right, bottom );
+    // falda ondulada (3 picos)
+    ctx.lineTo( right - r * 0.66, bottom - 4 );
+    ctx.lineTo( cx, bottom );
+    ctx.lineTo( left + r * 0.66, bottom - 4 );
+    ctx.lineTo( left, bottom );
+    ctx.closePath();
+    ctx.fill();
+  }
 
   // ojos mirando segun direccion
   const dir = DIRS[ g.dir ] || { x: 0, y: 0 };
@@ -147,6 +154,16 @@ function drawHUD( ctx, game, W ) {
 // Colores en el orden de GHOST_STARTS: rojo, rosa, cian, naranja.
 const GHOST_COLORS = [ '#ff0000', '#ffb8ff', '#00ffff', '#ffb852' ];
 
+// Color del fantasma segun su estado: asustado azul, con parpadeo a blanco
+// en los ultimos 2 s (FRIGHTENED_FLASH, alternando con el frame de
+// animacion); normal, su color propio.
+function ghostColor( game, g, i, frame ) {
+  if ( g.state !== 'frightened' ) return GHOST_COLORS[ i ] || '#ff0000';
+  const flashing =
+    game.frightTimer <= FRIGHTENED_FLASH && Math.floor( frame / 8 ) % 2 === 0;
+  return flashing ? FRIGHTENED_FLASH_COLOR : FRIGHTENED_COLOR;
+}
+
 function draw( ctx, game, frame ) {
   const grid = game.grid;
   const W = grid[ 0 ].length;
@@ -159,7 +176,7 @@ function draw( ctx, game, frame ) {
   drawDoor( ctx, grid );
   drawDots( ctx, grid );
   drawPacman( ctx, game.pacman, frame );
-  game.ghosts.forEach( ( g, i ) => drawGhost( ctx, g, GHOST_COLORS[ i ] || '#ff0000' ) );
+  game.ghosts.forEach( ( g, i ) => drawGhost( ctx, g, ghostColor( game, g, i, frame ) ) );
   drawHUD( ctx, game, W );
 }
 

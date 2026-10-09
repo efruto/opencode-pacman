@@ -1,6 +1,6 @@
 # SPEC 02 — Corral con puerta de un solo sentido y rebote de espera
 
-> **Estado:** Aprobado
+> **Estado:** Implementado
 > **Depende de:** SPEC 01
 > **Fecha:** 2026-10-07
 > **Objetivo:** Que ningún fantasma liberado vuelva a quedar atrapado en el corral — la puerta solo se cruza hacia arriba y quienes esperan su turno rebotan dentro como en el arcade antes de salir escalonadas.
